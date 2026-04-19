@@ -14,14 +14,15 @@ function App() {
   const [filterCategory, setFilterCategory] = useState("Toutes");
   const [filterMonth, setFilterMonth] = useState(currentMonth);
   const [editId, setEditId] = useState(null);
+
   const [monthlyBudget, setMonthlyBudget] = useState(() => {
-    const saved = localStorage.getItem("monthlyBudget");
-    return saved ? Number(saved) : 2000;
+    const savedBudget = localStorage.getItem("monthlyBudget");
+    return savedBudget ? Number(savedBudget) : 2000;
   });
 
   const [transactions, setTransactions] = useState(() => {
-    const saved = localStorage.getItem("transactions");
-    return saved ? JSON.parse(saved) : [];
+    const savedTransactions = localStorage.getItem("transactions");
+    return savedTransactions ? JSON.parse(savedTransactions) : [];
   });
 
   useEffect(() => {
@@ -45,108 +46,770 @@ function App() {
     if (!amount || !label || !date) return;
 
     if (editId) {
-      setTransactions(
-        transactions.map((t) =>
-          t.id === editId
-            ? { ...t, amount: Number(amount), type, label, category, date }
-            : t
-        )
+      const updatedTransactions = transactions.map((transaction) =>
+        transaction.id === editId
+          ? {
+              ...transaction,
+              amount: Number(amount),
+              type,
+              label,
+              category,
+              date,
+            }
+          : transaction
       );
+
+      setTransactions(updatedTransactions);
       resetForm();
     } else {
-      setTransactions([
-        ...transactions,
-        {
-          id: Date.now(),
-          amount: Number(amount),
-          type,
-          label,
-          category,
-          date,
-        },
-      ]);
+      const newTransaction = {
+        id: Date.now() + Math.random(),
+        amount: Number(amount),
+        type,
+        label,
+        category,
+        date,
+      };
+
+      setTransactions([...transactions, newTransaction]);
       resetForm();
     }
   };
 
-  const deleteTransaction = (id) => {
-    setTransactions(transactions.filter((t) => t.id !== id));
+  const deleteTransaction = (idToDelete) => {
+    setTransactions(
+      transactions.filter((transaction) => transaction.id !== idToDelete)
+    );
   };
 
-  const filtered = transactions.filter((t) => {
-    const okCat = filterCategory === "Toutes" || t.category === filterCategory;
-    const okMonth =
-      !filterMonth || t.date.slice(0, 7) === filterMonth;
-    return okCat && okMonth;
+  const editTransaction = (transaction) => {
+    setAmount(transaction.amount);
+    setType(transaction.type);
+    setLabel(transaction.label);
+    setCategory(transaction.category);
+    setDate(transaction.date || today);
+    setEditId(transaction.id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const clearAllTransactions = () => {
+    const confirmed = window.confirm(
+      "Tu veux vraiment supprimer toutes les transactions ?"
+    );
+
+    if (confirmed) {
+      setTransactions([]);
+      resetForm();
+      setFilterCategory("Toutes");
+      setFilterMonth(currentMonth);
+    }
+  };
+
+  const filteredTransactions = transactions.filter((transaction) => {
+    const matchCategory =
+      filterCategory === "Toutes" || transaction.category === filterCategory;
+
+    const matchMonth =
+      !filterMonth ||
+      (transaction.date && transaction.date.slice(0, 7) === filterMonth);
+
+    return matchCategory && matchMonth;
   });
 
-  const income = filtered
-    .filter((t) => t.type === "income")
-    .reduce((a, b) => a + b.amount, 0);
+  const totalIncome = filteredTransactions
+    .filter((transaction) => transaction.type === "income")
+    .reduce((total, transaction) => total + Number(transaction.amount), 0);
 
-  const expense = filtered
-    .filter((t) => t.type === "expense")
-    .reduce((a, b) => a + b.amount, 0);
+  const totalExpense = filteredTransactions
+    .filter((transaction) => transaction.type === "expense")
+    .reduce((total, transaction) => total + Number(transaction.amount), 0);
 
-  const balance = income - expense;
-  const remaining = monthlyBudget - expense;
+  const balance = totalIncome - totalExpense;
+  const remainingToSpend = monthlyBudget - totalExpense;
+
+  const expenseSummary = filteredTransactions
+    .filter((transaction) => transaction.type === "expense")
+    .reduce((summary, transaction) => {
+      const existing = summary[transaction.category] || 0;
+      summary[transaction.category] = existing + Number(transaction.amount);
+      return summary;
+    }, {});
+
+  const biggestCategoryEntry = Object.entries(expenseSummary).sort(
+    (a, b) => b[1] - a[1]
+  )[0];
+
+  const biggestCategoryName = biggestCategoryEntry ? biggestCategoryEntry[0] : "Aucune";
+  const biggestCategoryAmount = biggestCategoryEntry ? biggestCategoryEntry[1] : 0;
+
+  const maxExpense = Math.max(...Object.values(expenseSummary), 0);
+
+  const formatDate = (value) => {
+    return value ? value.split("-").reverse().join("-") : "Sans date";
+  };
+
+  const exportToCSV = () => {
+    if (filteredTransactions.length === 0) {
+      alert("Aucune transaction à exporter");
+      return;
+    }
+
+    const headers = ["Date", "Libellé", "Montant", "Type", "Catégorie"];
+
+    const rows = filteredTransactions.map((t) => [
+      t.date ? t.date.split("-").reverse().join("-") : "",
+      `"${(t.label || "").replace(/"/g, '""')}"`,
+      t.amount,
+      t.type === "income" ? "Revenu" : "Dépense",
+      `"${(t.category || "").replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent = [headers, ...rows]
+      .map((row) => row.join(";"))
+      .join("\n");
+
+    const blob = new Blob(["\uFEFF" + csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "budget.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const importFromCSV = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      const text = e.target.result;
+      const lines = text.split(/\r?\n/).filter((line) => line.trim() !== "");
+
+      if (lines.length < 2) {
+        alert("Le fichier est vide ou invalide");
+        event.target.value = "";
+        return;
+      }
+
+      const dataLines = lines.slice(1);
+
+      const importedTransactions = dataLines
+        .map((line) => {
+          const parts = line.split(";");
+
+          if (parts.length < 5) return null;
+
+          const rawDate = parts[0].trim();
+          const rawLabel = parts[1]
+            .trim()
+            .replace(/^"|"$/g, "")
+            .replace(/""/g, '"');
+          const rawAmount = parts[2].trim().replace(",", ".");
+          const rawType = parts[3].trim();
+          const rawCategory = parts[4]
+            .trim()
+            .replace(/^"|"$/g, "")
+            .replace(/""/g, '"');
+
+          let formattedDate = today;
+
+          if (rawDate.includes("-")) {
+            const dateParts = rawDate.split("-");
+            if (dateParts[0].length === 2) {
+              formattedDate = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+            } else {
+              formattedDate = rawDate;
+            }
+          }
+
+          return {
+            id: Date.now() + Math.random(),
+            date: formattedDate,
+            label: rawLabel,
+            amount: Number(rawAmount),
+            type: rawType === "Revenu" ? "income" : "expense",
+            category: rawCategory || "Autre",
+          };
+        })
+        .filter(
+          (item) =>
+            item &&
+            item.label &&
+            !Number.isNaN(item.amount) &&
+            item.type &&
+            item.category
+        );
+
+      if (importedTransactions.length === 0) {
+        alert("Aucune ligne exploitable dans le fichier");
+        event.target.value = "";
+        return;
+      }
+
+      const confirmed = window.confirm(
+        "Ajouter ce fichier aux transactions déjà présentes ?"
+      );
+
+      if (confirmed) {
+        setTransactions([...transactions, ...importedTransactions]);
+      }
+
+      event.target.value = "";
+    };
+
+    reader.readAsText(file);
+  };
+
+  const pageStyle = {
+    minHeight: "100vh",
+    background: "linear-gradient(180deg, #edf4ff 0%, #f7f9fc 45%, #eef2f7 100%)",
+    padding: "20px",
+    fontFamily: "Arial, sans-serif",
+  };
+
+  const containerStyle = {
+    maxWidth: "760px",
+    margin: "0 auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: "18px",
+  };
+
+  const cardStyle = {
+    backgroundColor: "white",
+    borderRadius: "20px",
+    padding: "18px",
+    boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
+    border: "1px solid #e5e7eb",
+  };
+
+  const inputStyle = {
+    width: "100%",
+    padding: "13px 14px",
+    borderRadius: "12px",
+    border: "1px solid #d1d5db",
+    boxSizing: "border-box",
+    fontSize: "15px",
+    backgroundColor: "white",
+  };
+
+  const buttonBase = {
+    padding: "12px 14px",
+    borderRadius: "12px",
+    border: "none",
+    color: "white",
+    fontWeight: "bold",
+    cursor: "pointer",
+    fontSize: "14px",
+  };
 
   return (
-    <div style={{ padding: 20, fontFamily: "Arial" }}>
-      <h1>Mon Budget</h1>
+    <div style={pageStyle}>
+      <div style={containerStyle}>
+        <div
+          style={{
+            ...cardStyle,
+            background: "linear-gradient(135deg, #0f172a 0%, #1d4ed8 100%)",
+            color: "white",
+            padding: "24px",
+          }}
+        >
+          <div style={{ fontSize: "13px", opacity: 0.85, marginBottom: "8px" }}>
+            Tableau de bord
+          </div>
+          <h1 style={{ margin: 0, fontSize: "34px" }}>Mon Budget</h1>
 
-      <h2>Tableau de bord</h2>
-      <p>Solde : {balance} €</p>
-      <p>Dépenses : {expense} €</p>
-      <p>Revenus : {income} €</p>
-      <p>Restant à dépenser : {remaining} €</p>
-
-      <h2>Ajouter</h2>
-
-      <input
-        placeholder="Libellé"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-      />
-
-      <input
-        type="number"
-        placeholder="Montant"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-      />
-
-      <input
-        type="date"
-        value={date}
-        onChange={(e) => setDate(e.target.value)}
-      />
-
-      <select value={type} onChange={(e) => setType(e.target.value)}>
-        <option value="expense">Dépense</option>
-        <option value="income">Revenu</option>
-      </select>
-
-      <select value={category} onChange={(e) => setCategory(e.target.value)}>
-        <option>Courses</option>
-        <option>Essence</option>
-        <option>Loisirs</option>
-        <option>Salaire</option>
-        <option>Crédit</option>
-      </select>
-
-      <button onClick={addOrUpdateTransaction}>
-        Ajouter
-      </button>
-
-      <h2>Transactions</h2>
-
-      {filtered.map((t) => (
-        <div key={t.id}>
-          {t.label} - {t.amount} € ({t.category})
-          <button onClick={() => deleteTransaction(t.id)}>X</button>
+          <div
+            style={{
+              marginTop: "18px",
+              backgroundColor: "rgba(255,255,255,0.14)",
+              padding: "18px",
+              borderRadius: "18px",
+            }}
+          >
+            <div style={{ fontSize: "14px", opacity: 0.9 }}>Solde affiché</div>
+            <div
+              style={{
+                fontSize: "34px",
+                fontWeight: "800",
+                marginTop: "6px",
+                color: balance >= 0 ? "#dcfce7" : "#fecaca",
+              }}
+            >
+              {balance} €
+            </div>
+          </div>
         </div>
-      ))}
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+            gap: "14px",
+          }}
+        >
+          <div style={{ ...cardStyle, background: "#ecfdf5" }}>
+            <div style={{ fontSize: "13px", color: "#065f46" }}>Revenus affichés</div>
+            <div style={{ fontSize: "24px", fontWeight: "800", marginTop: "6px", color: "#047857" }}>
+              {totalIncome} €
+            </div>
+          </div>
+
+          <div style={{ ...cardStyle, background: "#fef2f2" }}>
+            <div style={{ fontSize: "13px", color: "#991b1b" }}>Dépenses affichées</div>
+            <div style={{ fontSize: "24px", fontWeight: "800", marginTop: "6px", color: "#dc2626" }}>
+              {totalExpense} €
+            </div>
+          </div>
+
+          <div
+            style={{
+              ...cardStyle,
+              background: remainingToSpend >= 0 ? "#eff6ff" : "#fff7ed",
+            }}
+          >
+            <div style={{ fontSize: "13px", color: "#374151" }}>Restant à dépenser</div>
+            <div
+              style={{
+                fontSize: "24px",
+                fontWeight: "800",
+                marginTop: "6px",
+                color: remainingToSpend >= 0 ? "#2563eb" : "#ea580c",
+              }}
+            >
+              {remainingToSpend} €
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            <div style={{ fontSize: "13px", color: "#374151" }}>Catégorie la plus élevée</div>
+            <div style={{ fontSize: "18px", fontWeight: "800", marginTop: "6px" }}>
+              {biggestCategoryName === "Aucune" ? "Aucune" : biggestCategoryName}
+            </div>
+            <div style={{ marginTop: "4px", color: "#6b7280" }}>
+              {biggestCategoryName === "Aucune" ? "Aucune dépense" : `${biggestCategoryAmount} €`}
+            </div>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Budget mensuel</h2>
+          <input
+            type="number"
+            value={monthlyBudget}
+            onChange={(e) => setMonthlyBudget(Number(e.target.value) || 0)}
+            style={inputStyle}
+            placeholder="Budget du mois"
+          />
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>
+            {editId ? "Modifier une transaction" : "Ajouter une transaction"}
+          </h2>
+
+          <div style={{ display: "grid", gap: "12px" }}>
+            <input
+              type="text"
+              placeholder="Libellé"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="number"
+              placeholder="Montant"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              style={inputStyle}
+            />
+
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              style={inputStyle}
+            />
+
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="expense">Dépense</option>
+              <option value="income">Revenu</option>
+            </select>
+
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="Courses">Courses</option>
+              <option value="Logement">Logement</option>
+              <option value="Essence">Essence</option>
+              <option value="Loisirs">Loisirs</option>
+              <option value="Salaire">Salaire</option>
+              <option value="Crédit">Crédit</option>
+              <option value="Autre">Autre</option>
+            </select>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: editId ? "1fr 1fr" : "1fr",
+                gap: "10px",
+              }}
+            >
+              <button
+                onClick={addOrUpdateTransaction}
+                style={{
+                  ...buttonBase,
+                  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                }}
+              >
+                {editId ? "Mettre à jour la transaction" : "Ajouter la transaction"}
+              </button>
+
+              {editId && (
+                <button
+                  onClick={resetForm}
+                  style={{
+                    ...buttonBase,
+                    backgroundColor: "#6b7280",
+                  }}
+                >
+                  Annuler la modification
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Filtres</h2>
+
+          <div style={{ display: "grid", gap: "12px" }}>
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="Toutes">Toutes les catégories</option>
+              <option value="Courses">Courses</option>
+              <option value="Logement">Logement</option>
+              <option value="Essence">Essence</option>
+              <option value="Loisirs">Loisirs</option>
+              <option value="Salaire">Salaire</option>
+              <option value="Crédit">Crédit</option>
+              <option value="Autre">Autre</option>
+            </select>
+
+            <input
+              type="month"
+              value={filterMonth}
+              onChange={(e) => setFilterMonth(e.target.value)}
+              style={inputStyle}
+            />
+
+            <button
+              onClick={() => {
+                setFilterCategory("Toutes");
+                setFilterMonth("");
+              }}
+              style={{
+                ...buttonBase,
+                backgroundColor: "#6b7280",
+              }}
+            >
+              Enlever les filtres
+            </button>
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Actions</h2>
+
+          <div style={{ display: "grid", gap: "10px" }}>
+            <button
+              onClick={clearAllTransactions}
+              style={{
+                ...buttonBase,
+                backgroundColor: "#111827",
+              }}
+            >
+              Effacer toutes les transactions
+            </button>
+
+            <button
+              onClick={exportToCSV}
+              style={{
+                ...buttonBase,
+                backgroundColor: "#059669",
+              }}
+            >
+              Exporter en CSV
+            </button>
+
+            <button
+              onClick={handleImportClick}
+              style={{
+                ...buttonBase,
+                backgroundColor: "#7c3aed",
+              }}
+            >
+              Importer un fichier CSV
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv"
+              onChange={importFromCSV}
+              style={{ display: "none" }}
+            />
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Liste des transactions</h2>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            {filteredTransactions.length === 0 ? (
+              <div
+                style={{
+                  padding: "16px",
+                  borderRadius: "16px",
+                  backgroundColor: "#f8fafc",
+                  color: "#64748b",
+                  textAlign: "center",
+                }}
+              >
+                Aucune transaction pour ce filtre
+              </div>
+            ) : (
+              filteredTransactions.map((transaction) => (
+                <div
+                  key={transaction.id}
+                  style={{
+                    backgroundColor:
+                      transaction.type === "income" ? "#ecfdf5" : "#fef2f2",
+                    border: `1px solid ${
+                      transaction.type === "income" ? "#bbf7d0" : "#fecaca"
+                    }`,
+                    borderRadius: "18px",
+                    padding: "14px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      alignItems: "flex-start",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div
+                        style={{
+                          fontWeight: "800",
+                          fontSize: "16px",
+                          color: "#111827",
+                        }}
+                      >
+                        {transaction.type === "income" ? "+ " : "- "}
+                        {transaction.amount} €
+                      </div>
+
+                      <div style={{ marginTop: "6px", fontSize: "15px", color: "#374151" }}>
+                        {transaction.label}
+                      </div>
+
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "8px",
+                        }}
+                      >
+                        <span
+                          style={{
+                            backgroundColor: "white",
+                            borderRadius: "999px",
+                            padding: "6px 10px",
+                            fontSize: "12px",
+                            border: "1px solid #e5e7eb",
+                          }}
+                        >
+                          {transaction.category}
+                        </span>
+
+                        <span
+                          style={{
+                            backgroundColor: "white",
+                            borderRadius: "999px",
+                            padding: "6px 10px",
+                            fontSize: "12px",
+                            border: "1px solid #e5e7eb",
+                          }}
+                        >
+                          {formatDate(transaction.date)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                        minWidth: "96px",
+                      }}
+                    >
+                      <button
+                        onClick={() => editTransaction(transaction)}
+                        style={{
+                          border: "none",
+                          backgroundColor: "#f59e0b",
+                          color: "white",
+                          padding: "10px 12px",
+                          borderRadius: "12px",
+                          fontWeight: "700",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Modifier
+                      </button>
+
+                      <button
+                        onClick={() => deleteTransaction(transaction.id)}
+                        style={{
+                          border: "none",
+                          backgroundColor: "#dc2626",
+                          color: "white",
+                          padding: "10px 12px",
+                          borderRadius: "12px",
+                          fontWeight: "700",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Résumé des dépenses</h2>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {Object.entries(expenseSummary).length === 0 ? (
+              <div
+                style={{
+                  padding: "16px",
+                  borderRadius: "16px",
+                  backgroundColor: "#f8fafc",
+                  color: "#64748b",
+                  textAlign: "center",
+                }}
+              >
+                Aucune dépense pour ce filtre
+              </div>
+            ) : (
+              Object.entries(expenseSummary).map(([cat, total]) => (
+                <div
+                  key={cat}
+                  style={{
+                    backgroundColor: "#f8fafc",
+                    padding: "14px",
+                    borderRadius: "16px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <strong>{cat}</strong>
+                  <span>{total} €</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          <h2 style={{ marginTop: 0 }}>Graphique des dépenses</h2>
+
+          {Object.entries(expenseSummary).length === 0 ? (
+            <div
+              style={{
+                padding: "16px",
+                borderRadius: "16px",
+                backgroundColor: "#f8fafc",
+                color: "#64748b",
+                textAlign: "center",
+              }}
+            >
+              Pas de graphique à afficher
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              {Object.entries(expenseSummary).map(([cat, total]) => (
+                <div key={cat}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      marginBottom: "6px",
+                      fontSize: "14px",
+                      fontWeight: "600",
+                    }}
+                  >
+                    <span>{cat}</span>
+                    <span>{total} €</span>
+                  </div>
+
+                  <div
+                    style={{
+                      width: "100%",
+                      backgroundColor: "#e5e7eb",
+                      borderRadius: "999px",
+                      height: "14px",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${maxExpense > 0 ? (total / maxExpense) * 100 : 0}%`,
+                        background: "linear-gradient(135deg, #2563eb 0%, #60a5fa 100%)",
+                        height: "100%",
+                        borderRadius: "999px",
+                      }}
+                    ></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
